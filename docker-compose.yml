@@ -1,0 +1,67 @@
+version: "3.8"
+services:
+  rabbit:
+    image: rabbitmq:3-management-alpine
+    container_name: pdaltagent_rabbitmq
+    environment:
+      # Username and password for rabbitmq AMQP and management
+      - RABBITMQ_DEFAULT_USER=pdaltagent
+      - RABBITMQ_DEFAULT_PASS=pdaltagent
+    volumes:
+      - ./sslconfig/rabbit/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./sslconfig/rabbit/cert.pem:/etc/rabbitmq/cert.pem:ro
+      - ./sslconfig/rabbit/key.pem:/etc/rabbitmq/key.pem:ro
+    ports:
+      # AMQP+TLS protocol port -- not needed from outside
+      # - '5671:5671'
+      # HTTPS management UI
+      - '15671:15671'
+    restart: always
+  pdagentd:
+    image: martindstone/pdaltagent:0.4-alpha2
+    container_name: pdaltagent_pdagentd
+    environment:
+      - MONGODB_URL=mongodb://root:example@pdaltagent_mongo/?tls=true&tlsAllowInvalidCertificates=true&tlsAllowInvalidHostnames=true
+
+      # Set CELERY_BROKER_URL to the URL of a backend for Celery:
+      - CELERY_BROKER_URL=pyamqp://pdaltagent:pdaltagent@pdaltagent_rabbitmq//
+      - CELERY_CONFIG_MODULE=celeryconfig
+
+      # Set PDSEND_EVENTS_BASE_URL to a URL where the pd-send command should send event payloads:
+      - PDSEND_EVENTS_BASE_URL=https://localhost:8443
+
+      # Set PDSEND_SKIP_CERT_VERIFY if you want the pd-send command to skip SSL certificate verification
+      # (for example if you are using a self-signed certificate (which is the default in the Docker image)):
+      - PDSEND_SKIP_CERT_VERIFY=true
+    volumes:
+      - ./pdaltagent_pdagentd/plugins:/usr/lib/python3.10/site-packages/pdaltagent/plugins
+      - ./pdaltagent_pdagentd/plugin-lib:/usr/lib/python3.10/site-packages/pdaltagent/plugin-lib
+      - ./pdaltagent_pdagentd/csvfiles:/csvfiles
+      - ./sslconfig/pdagentd/celeryconfig.py:/usr/lib/python3.10/celeryconfig.py:ro
+      - ./sslconfig/pdagentd/supervisord.conf:/etc/supervisord.conf:ro
+      - ./sslconfig/pdagentd/cert.pem:/etc/pdagentd/ssl/cert.pem:ro
+      - ./sslconfig/pdagentd/key.pem:/etc/pdagentd/ssl/key.pem:ro
+    ports:
+      # flask HTTPS
+      - '8443:8443'
+    depends_on:
+      - rabbit
+      - mongo
+    restart: always
+
+  mongo:
+    image: mongo:latest
+    command: --tlsMode=requireTLS --tlsCertificateKeyFile=/etc/certkey.pem
+    container_name: pdaltagent_mongo
+    restart: always
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example
+      - MONGODB_ADVERTISED_HOSTNAME=pdaltagent_mongossl
+      - MONGODB_CLIENT_EXTRA_FLAGS=--tls --tlsAllowInvalidCertificates --tlsAllowInvalidHostnames --host pdaltagent_mongossl
+    volumes:
+      - ./pdaltagent_pdagentd/mongo_data:/data/db
+      - ./sslconfig/mongo/certkey.pem:/etc/certkey.pem:ro
+    ports:
+      # Mongo+TLS
+      - 27017:27017
